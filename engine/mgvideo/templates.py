@@ -302,8 +302,9 @@ def t_bullets(img, sc, p, ctx):
 
 
 # ---------------------------------------------------------------- shot
-def _marks(card_img, sc, p, crop_now, size):
-    """在卡片上画标注。rect / arrow 坐标都是原片坐标，按当前裁剪框换算。"""
+def _marks(card_img, sc, p, crop_now, size, src_img=None):
+    """在卡片上画标注。rect / arrow 坐标都是原片坐标，按当前裁剪框换算。
+    src_img 是原片帧，只给放大镜用（不往 spec 里塞临时字段）。"""
     for mk in sc.get("marks", []):
         a = mk.get("from", 0.0)
         b = mk.get("to", 1.0)
@@ -327,9 +328,9 @@ def _marks(card_img, sc, p, crop_now, size):
             p1 = (r[0] + r[2] / 2, r[1] + r[3] / 2)
             p0 = (p1[0] + mk.get("dx", 200) * C.S, p1[1] + mk.get("dy", 120) * C.S)
             card_img = C.arrow(card_img, p0, p1, pp, color=color)
-        elif typ == "magnifier":
+        elif typ == "magnifier" and src_img is not None:
             r = S.to_local(mk["rect"], crop_now, size)
-            card_img = S.magnifier(card_img, mk.get("_src"), mk["rect"],
+            card_img = S.magnifier(card_img, src_img, mk["rect"],
                                    (size[0] * mk.get("cx", 0.72), size[1] * mk.get("cy", 0.66)),
                                    mk.get("r", 110) * C.S, pp, ring=color)
         if mk.get("text") and typ in ("brackets", "box"):
@@ -357,11 +358,8 @@ def t_shot(img, sc, p, ctx):
         card = Image.new("RGBA", size, (20, 16, 34, 255))
     else:
         card = S.crop_anim(src_img, crop_now, crop_now, 0.0, size)
-        for mk in sc.get("marks", []):
-            if mk.get("type") == "magnifier":
-                mk["_src"] = src_img
 
-    card = _marks(card, sc, p, crop_now, size)
+    card = _marks(card, sc, p, crop_now, size, src_img)
     radius = int(28 * C.S)
     card.putalpha(C.round_mask(size, radius))
     edge = Image.new("RGBA", size, (0, 0, 0, 0))
