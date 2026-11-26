@@ -48,6 +48,12 @@ def timeline(spec):
 
 def _prepare(spec):
     global _SPEC, _TIMELINE
+    scenes = spec.get("scenes") or []
+    if not scenes:
+        raise ValueError("spec 里 scenes 是空的：至少要有一段")
+    for i, sc in enumerate(scenes):
+        if "template" not in sc:
+            raise ValueError(f"第 {i + 1} 段缺 template 字段")
     _SPEC = spec
     w, h = spec.get("size", [1920, 1080])
     C.configure(w, h, spec.get("supersample", 1.25))
@@ -189,8 +195,16 @@ def frame_image(frame, spec=None):
     return scene_overlay(scene_body(last, b - 1, 1.0, spec), last, b - 1, 1.0, spec)
 
 
+def _init_worker(spec):
+    """多进程 worker 初始化：子进程里没有父进程的模块状态，
+    不调 _prepare 的话 _TIMELINE 是 None，第一帧就崩。"""
+    _prepare(spec)
+
+
 def _render_one(args):
     frame, out_path, spec = args
+    if _TIMELINE is None:          # 直接调用（或 worker 未初始化）时的兜底
+        _prepare(spec)
     img = frame_image(frame, spec)
     img.putalpha(Image.new("L", (C.CW, C.CH), 255))
     out = img.convert("RGB").resize((C.W, C.H), Image.LANCZOS)
@@ -228,24 +242,28 @@ def render(spec, out_mp4, out_dir=None, workers=None, keep_frames=False, progres
     tasks = [(i, os.path.join(out_dir, f"{i:04d}.png"), spec) for i in idxs]
 
     workers = workers or min(os.cpu_count() or 4, 8)
-    done = 0
+    finished = set()
     if workers > 1:
         try:
             import multiprocessing as mp
-            with mp.Pool(workers) as pool:
-                for k, _ in enumerate(pool.imap_unordered(_render_one, tasks, chunksize=4)):
-                    done = k
+            with mp.Pool(workers, initializer=_init_worker, initargs=(spec,)) as pool:
+                for k, fr in enumerate(pool.imap_unordered(_render_one, tasks, chunksize=4)):
+                    finished.add(fr)
                     if progress and k % 30 == 0:
                         progress(k, len(tasks))
         except (PermissionError, OSError) as e:
             print(f"[mgvideo] 多进程不可用（{type(e).__name__}: {e}），退回单进程。"
                   f"需要提速可以用 --shard 分片并行。", flush=True)
             workers = 1
+        except Exception as e:
+            print(f"[mgvideo] 多进程渲染中断（{type(e).__name__}: {e}），余下帧改用单进程。", flush=True)
+            workers = 1
     if workers <= 1:
-        for k, t in enumerate(tasks):
+        rest = [t for t in tasks if t[0] not in finished]
+        for k, t in enumerate(rest):
             _render_one(t)
-            if progress and k % 30 == 0:
-                progress(k, len(tasks))
+            if progress and (len(finished) + k) % 30 == 0:
+                progress(len(finished) + k, len(tasks))
 
     # 分片模式下不编码（由调用方在所有分片完成后统一编码）
     if shard and shard[1] > 1:
