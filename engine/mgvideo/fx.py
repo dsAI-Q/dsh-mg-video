@@ -217,20 +217,27 @@ def xf_slide_up(a, b, p, tilt=0.06):
     return out
 
 
-_INK = None
+_INK = {}
 
 
-def xf_ink(a, b, p, softness=0.14, seed=23):
-    """墨迹扩散：固定噪声场做阈值"""
-    global _INK
-    if _INK is None:
-        rng = np.random.default_rng(seed)
-        small = rng.random((C.CH // 26, C.CW // 26)).astype(np.float32)
+def _ink_noise():
+    """墨迹噪声场。按画布尺寸缓存：换尺寸后旧场尺寸不符，paste 会直接报
+    「images do not match」，所以要按 (CW, CH) 分键。"""
+    key = (C.CW, C.CH)
+    if key not in _INK:
+        rng = np.random.default_rng(23)
+        small = rng.random((max(C.CH // 26, 2), max(C.CW // 26, 2))).astype(np.float32)
         n = Image.fromarray((small * 255).astype(np.uint8), "L").resize((C.CW, C.CH), Image.BICUBIC)
         n = n.filter(ImageFilter.GaussianBlur(9))
-        _INK = np.asarray(n, dtype=np.float32) / 255.0
+        _INK[key] = np.asarray(n, dtype=np.float32) / 255.0
+    return _INK[key]
+
+
+def xf_ink(a, b, p, softness=0.14):
+    """墨迹扩散：固定噪声场做阈值"""
+    noise = _ink_noise()
     k = C.eio(p) * (1 + softness) - softness * 0.5
-    mask = np.clip((k - _INK) / softness + 0.5, 0, 1)
+    mask = np.clip((k - noise) / softness + 0.5, 0, 1)
     out = a.copy()
     out.paste(b, (0, 0), Image.fromarray((mask * 255).astype(np.uint8), "L"))
     return out
@@ -368,11 +375,15 @@ TEXT_STYLES = {
 
 # ============================ 画面级 ============================
 def shake(img, frame, amp=10, decay=1.0, seed=3):
-    """镜头震动：每帧取确定性偏移（seed 要用帧号，否则等于没动）"""
+    """镜头震动：每帧取确定性偏移（seed 要用帧号，否则等于没动）。
+
+    位移会漏出透明的边，所以先铺一张原图打底，再把位移后的画面叠上去。
+    之前直接返回位移结果，边缘 alpha=0，合成后就是一圈黑边。
+    """
     rng = np.random.default_rng(seed)
     dx = (rng.random() - 0.5) * 2 * amp * C.S * decay
     dy = (rng.random() - 0.5) * 2 * amp * C.S * decay
-    out = C.layer()
+    out = img.copy()
     out.alpha_composite(img, dest=(int(dx), int(dy)))
     return out
 
