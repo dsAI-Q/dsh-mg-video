@@ -8,6 +8,8 @@ import sys
 
 from PIL import Image, ImageDraw
 
+from . import templates
+
 
 def _ff():
     from .render import ffmpeg_bin
@@ -34,24 +36,65 @@ def cmd_render(a):
 def cmd_check(a):
     from . import render
     spec = render.load_spec(a.spec)
-    total = render._prepare(spec)
     tl, total = render.timeline(spec)
     fps = int(spec.get("fps", 30))
+    problems = []
+    if not tl:
+        problems.append("scenes 为空")
     print(f"size      : {spec.get('size', [1920, 1080])} @ {fps}fps")
     print(f"total     : {total} frames = {total / fps:.2f}s")
     print(f"scenes    : {len(tl)}")
-    t = 0.0
     for i, (sc, aa, bb) in enumerate(tl):
         print(f"  {i + 1:02d} {sc.get('template', '?'):9s} {aa / fps:6.2f}-{bb / fps:6.2f}s  "
               f"{(sc.get('duration', 0)):5.2f}s  {sc.get('chapter', '')}")
-        tpl = sc.get("template")
-        if tpl not in __import__("mgvideo.templates", fromlist=["TEMPLATES"]).TEMPLATES:
-            print(f"     !! 未知模板: {tpl}")
-        if tpl == "shot" and sc.get("frames_dir") and not os.path.isdir(sc["frames_dir"]):
-            print(f"     !! frames_dir 不存在: {sc['frames_dir']}")
+        tpl_name = sc.get("template")
+        if tpl_name not in templates.TEMPLATES:
+            problems.append(f"第 {i + 1} 段模板不存在: {tpl_name}")
+            print(f"     !! 未知模板: {tpl_name}")
+        if tpl_name == "shot":
+            d = sc.get("frames_dir")
+            if not d:
+                problems.append(f"第 {i + 1} 段是 shot 但没给 frames_dir")
+                print("     !! shot 段缺少 frames_dir")
+            elif not os.path.isdir(d):
+                problems.append(f"第 {i + 1} 段的 frames_dir 不存在: {d}")
+                print(f"     !! frames_dir 不存在: {d}")
+        if float(sc.get("duration", 0)) <= 0:
+            problems.append(f"第 {i + 1} 段时长 <= 0")
+    if problems:
+        print("\n问题：")
+        for p in problems:
+            print("  -", p)
     if a.json:
         print(json.dumps({"scenes": [{"template": s.get("template"), "start": x / fps, "end": y / fps}
-                                     for s, x, y in tl], "total": total}, ensure_ascii=False, indent=2))
+                                     for s, x, y in tl], "total": total,
+                          "problems": problems}, ensure_ascii=False, indent=2))
+    return 1 if problems else 0
+
+
+def cmd_encode(a):
+    """分片跑完之后统一编码（渲染阶段只出帧）"""
+    from . import render, audio as A
+    spec = render.load_spec(a.spec)
+    tl, total = render.timeline(spec)
+    fps = int(spec.get("fps", 30))
+    wav = a.wav
+    if not wav and (spec.get("audio") or {}).get("voice") or not wav:
+        cfg = spec.get("audio") or {}
+        if cfg.get("voice") or cfg.get("bgm", True):
+            wav = os.path.join(a.frames, "mix.wav")
+            A.build(total / fps, wav, voice=cfg.get("voice"),
+                    scene_bounds=[aa / fps for _, aa, bb in tl][1:],
+                    ticks=[float(x) for x in cfg.get("ticks", [])],
+                    hits=[float(x) for x in cfg.get("hits", [])])
+    render.encode(spec, a.frames, a.out, wav)
+    print(json.dumps({"output": a.out, "frames": total, "wav": wav}, ensure_ascii=False))
+
+
+def cmd_selftest(a):
+    from . import selftest
+    ok, results = selftest.run(verbose=True)
+    return 0 if ok else 1
 
 
 def cmd_frames(a):
@@ -170,6 +213,16 @@ def main(argv=None):
     p = sub.add_parser("probe", help="读视频基本信息")
     p.add_argument("video")
     p.set_defaults(fn=cmd_probe)
+
+    st = sub.add_parser("selftest", help="跑回归自测（seg 归一化、缓存、漏边、音轨等）")
+    st.set_defaults(fn=cmd_selftest)
+
+    en = sub.add_parser("encode", help="把已渲染的帧序列编码成 mp4（分片流程用）")
+    en.add_argument("spec")
+    en.add_argument("--frames", required=True, help="帧目录")
+    en.add_argument("-o", "--out", required=True)
+    en.add_argument("--wav", default=None, help="现成音轨；不给就按 spec 现场合成")
+    en.set_defaults(fn=cmd_encode)
 
     a = ap.parse_args(argv)
     return a.fn(a) or 0
