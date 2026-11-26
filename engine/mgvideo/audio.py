@@ -27,14 +27,20 @@ CHORDS = [
 
 
 def _read_wav(path, n, sr=SR):
+    if not os.path.exists(path):
+        raise FileNotFoundError(f"人声音轨不存在：{path}")
     with wave.open(path, "rb") as w:
         ch, rs = w.getnchannels(), w.getframerate()
         raw = w.readframes(w.getnframes())
     a = np.frombuffer(raw, dtype=np.int16).astype(np.float32) / 32768.0
     a = a.reshape(-1, ch)
+    if ch == 1:                      # 单声道补成立体声，避免后续广播出意外
+        a = np.repeat(a, 2, axis=1)
+    elif ch > 2:
+        a = a[:, :2]
     if rs != sr:
         idx = np.linspace(0, a.shape[0] - 1, int(a.shape[0] * sr / rs))
-        a = np.stack([np.interp(idx, np.arange(a.shape[0]), a[:, c]) for c in range(ch)], axis=1)
+        a = np.stack([np.interp(idx, np.arange(a.shape[0]), a[:, c]) for c in range(a.shape[1])], axis=1)
     if a.shape[0] < n:
         a = np.pad(a, ((0, n - a.shape[0]), (0, 0)))
     return a[:n].astype(np.float32)
@@ -125,6 +131,8 @@ def build(duration, out, voice=None, scene_bounds=(), ticks=(), hits=(), sr=SR,
     hits           需要低频冲击的时刻（秒）
     """
     n = int(sr * duration)
+    if n < 32:
+        raise ValueError(f"时长为 {duration} 秒，太短了（至少要 0.05 秒）")
     pad = _pad(n, duration, sr)
     fx = np.zeros((n, 2), np.float32)
     for at in scene_bounds:
@@ -149,9 +157,10 @@ def build(duration, out, voice=None, scene_bounds=(), ticks=(), hits=(), sr=SR,
         mix = pad + fx
         target = 10 ** (-20.0 / 20)
 
-    fin = int(0.22 * sr)
+    # 淡入淡出长度要按时长夹住：0.22s 的淡入叠在 0.1s 的音轨上会数组形状不匹配
+    fin = min(int(0.22 * sr), max(n // 4, 1))
     mix[:fin] *= np.linspace(0, 1, fin)[:, None]
-    fo = int(fade_out * sr)
+    fo = min(int(fade_out * sr), max(n // 3, 0))
     if fo > 0:
         mix[-fo:] *= np.linspace(1, 0, fo)[:, None] ** 1.3
     mix *= target / (np.sqrt(np.mean(mix ** 2)) + 1e-12)
