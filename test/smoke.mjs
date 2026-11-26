@@ -52,6 +52,17 @@ fs.writeFileSync(specPath, JSON.stringify(spec, null, 2))
 
 console.log('mgvideo smoke\n')
 
+// 0. 仓库自身的基本卫生：package.json 不能带 BOM（带了 JSON.parse 直接失败）
+{
+  const pkgPath = path.join(ROOT, 'package.json')
+  const buf = fs.readFileSync(pkgPath)
+  const hasBom = buf.length >= 3 && buf[0] === 0xef && buf[1] === 0xbb && buf[2] === 0xbf
+  ok('package.json 无 BOM', !hasBom, hasBom ? 'UTF-8 BOM 会让 JSON.parse 失败' : '')
+  let parsed = null
+  try { parsed = JSON.parse(buf.toString('utf8').replace(/^\uFEFF/, '')) } catch {}
+  ok('package.json 可解析且声明 dsh.bundle', !!(parsed && parsed.dsh && parsed.dsh.bundle), '')
+}
+
 try {
   const bin = await findPython()
   ok('python 可用且有 Pillow/numpy', !!bin, bin)
