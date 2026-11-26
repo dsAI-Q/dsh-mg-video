@@ -1,0 +1,102 @@
+{
+  "size": [1920, 1080],
+  "fps": 30,
+  "supersample": 1.25,
+  "background": "bokeh",
+  "transition": "whip",
+  "transition_duration": 0.34,
+  "chrome": { "brand": "MG 模板库", "chapter": true, "progress": true },
+  "audio": { "bgm": true, "voice_db": -18.5, "pad_offset_db": -29 },
+  "scenes": [
+    {
+      "template": "title",
+      "duration": 3.0,
+      "background": "rays",
+      "transition": "none",
+      "title": "这不是剪出来的",
+      "subtitle": "是排出来的",
+      "kick": "一份 JSON 清单，一部片子",
+      "caption": "一份清单，就是一部片。"
+    },
+    {
+      "template": "number",
+      "duration": 6.0,
+      "background": "aurora",
+      "chapter": "数字卡",
+      "label": "市值",
+      "from": -40,
+      "to": -38,
+      "unit": "%",
+      "ratio": 0.40,
+      "ratio_to": 0.38,
+      "bars": [
+        { "label": "原值", "top": "100" },
+        { "label": "现值", "top": "62", "color": "gold" }
+      ],
+      "note": "十块钱，只剩六块",
+      "impact": { "at": 0.55, "len": 0.16, "glow": 0.3 },
+      "caption": "一个数字，配一个参照物，加一句翻译。"
+    },
+    {
+      "template": "compare",
+      "duration": 5.0,
+      "background": "grid",
+      "chapter": "对比卡",
+      "left": { "title": "改之前", "value": "-40%", "color": "red", "note": "整段重渲" },
+      "right": { "title": "改之后", "value": "-38%", "color": "gold", "note": "只改一个数" },
+      "note": "柱子自己跟着变，别的没动",
+      "caption": "左右各一句点评，底下给结论。"
+    },
+    {
+      "template": "flow",
+      "duration": 4.0,
+      "background": "bokeh",
+      "chapter": "流程卡",
+      "label": "怎么走",
+      "steps": ["素材", "清单", "渲染", "成片"],
+      "caption": "节点一个个亮，连线跟着长。"
+    },
+    {
+      "template": "timeline",
+      "duration": 4.0,
+      "background": "star",
+      "chapter": "时间轴",
+      "events": [
+        { "at": "0:00", "label": "写清单" },
+        { "at": "1:20", "label": "画面" },
+        { "at": "3:10", "label": "混音" }
+      ],
+      "caption": "时间推进，事件点弹出。"
+    },
+    {
+      "template": "bullets",
+      "duration": 5.0,
+      "background": "bokeh",
+      "chapter": "要点卡",
+      "title": "为什么用模板",
+      "items": [
+        { "text": "数字不会错", "note": "同屏只有一个版本" },
+        { "text": "字不会乱码", "note": "图元直接绘制" },
+        { "text": "版式不会崩", "note": "溢出自动缩字号" }
+      ],
+      "caption": "模板不聪明，但它不犯蠢。"
+    },
+    {
+      "template": "quote",
+      "duration": 4.0,
+      "background": "aurora",
+      "chapter": "引用卡",
+      "text": "AI 视频不是让它画，是让它排",
+      "by": "MG 渲染笔记",
+      "caption": "一句话，逐字浮现。"
+    },
+    {
+      "template": "end",
+      "duration": 3.0,
+      "background": "rays",
+      "transition": "ink",
+      "lines": ["9 个模板", "一份清单", "两分半出片"],
+      "note": "改文案只改清单，不碰版式"
+    }
+  ]
+}

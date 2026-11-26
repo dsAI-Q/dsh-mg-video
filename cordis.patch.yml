@@ -1,0 +1,4 @@
+- insert:
+    - id: mgvideo
+      name: "@dsai-q/dsh-mg-video"
+      config: {}

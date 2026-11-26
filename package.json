@@ -1,0 +1,46 @@
+{
+  "name": "@dsai-q/dsh-mg-video",
+  "version": "0.1.0",
+  "description": "Motion-graphics video renderer for DSH: one JSON manifest becomes a 1080p MG video. Template library, effect library, screenshot callouts for screen recordings, and procedural audio — all local, no API.",
+  "type": "module",
+  "license": "MIT",
+  "bin": {
+    "mgvideo": "src/cli.mjs",
+    "dsh-mg-video": "src/cli.mjs"
+  },
+  "exports": {
+    ".": "./src/plugin.mjs"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "files": [
+    "src",
+    "engine/mgvideo",
+    "examples",
+    "SKILL.md",
+    "PITFALLS.md",
+    "cordis.patch.yml",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "smoke": "node test/smoke.mjs",
+    "check:example": "node src/cli.mjs check examples/spec-demo.json"
+  },
+  "keywords": [
+    "motion-graphics",
+    "mg",
+    "video",
+    "explainer",
+    "ffmpeg",
+    "pillow",
+    "comfyui",
+    "dsh-plugin"
+  ]
+}
