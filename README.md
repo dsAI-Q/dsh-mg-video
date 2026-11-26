@@ -38,8 +38,11 @@ npm i -g @dsai-q/dsh-mg-video     # 或者直接 npx
 自检：
 
 ```bash
-mgvideo doctor
+mgvideo doctor      # Python / Pillow / numpy / ffmpeg 是否齐
+mgvideo selftest    # 11 条回归断言（seg 归一化、缓存、漏边、音轨…）
 ```
+
+`selftest` 不是摆设：每一条断言都对应一个真实修过的缺陷，改动后先跑它。
 
 ## 快速开始
 
@@ -143,13 +146,15 @@ mgvideo calib 录屏.mp4 312 --rect "470,285,515,168"
 单核 0.25 秒/帧。两种并行：
 
 ```bash
-# 多进程（受限环境自动退回单进程）
+# 多进程（受限环境自动退回单进程，不会中断）
 mgvideo render spec.json -o out.mp4 --workers 8
 
-# 分片：开 4 个终端各跑一份，最后统一编码
-mgvideo render spec.json -o out.mp4 --shard 0/4 --keep-frames
-...
-python -m mgvideo.render encode spec.json frames out.mp4 frames/mix.wav
+# 分片：开 4 个终端各跑一份（只出帧不编码），最后统一编码
+mgvideo render spec.json -o out.mp4 --shard 0/4 --keep-frames --frames-dir frames
+mgvideo render spec.json -o out.mp4 --shard 1/4 --keep-frames --frames-dir frames
+mgvideo render spec.json -o out.mp4 --shard 2/4 --keep-frames --frames-dir frames
+mgvideo render spec.json -o out.mp4 --shard 3/4 --keep-frames --frames-dir frames
+mgvideo encode spec.json --frames frames -o out.mp4
 ```
 
 ## 在 DSH 里当插件用
