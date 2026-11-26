@@ -82,13 +82,27 @@ export async function findPython() {
   )
 }
 
+const PATHISH = /\.(json|mp4|mov|mkv|avi|wav|mp3|m4a|png|jpg|jpeg)$/i
+
+function looksLikePath(a) {
+  if (!a || a.startsWith('-')) return false
+  if (/^\d+\/\d+$/.test(a)) return false // --shard 0/4
+  if (/^\d+(\.\d+)?$/.test(a)) return false
+  return a.includes('/') || a.includes('\\') || PATHISH.test(a)
+}
+
+/** 把相对路径按调用者的 cwd 转成绝对路径（Python 进程的 cwd 是 engine 目录） */
+export function absArgs(args, callerCwd = process.cwd()) {
+  return args.map((a) => (looksLikePath(a) ? path.resolve(callerCwd, a) : a))
+}
+
 /** 跑 `python -m mgvideo ...`，返回 { code, out } */
-export async function runCli(args, { cwd = ENGINE_DIR, env = {} } = {}) {
+export async function runCli(args, { cwd = ENGINE_DIR, env = {}, callerCwd = process.cwd() } = {}) {
   const bin = await findPython()
   const tmp = path.join(os.tmpdir(), `mgvideo-${Date.now()}-${Math.random().toString(36).slice(2)}.log`)
   const fd = fs.openSync(tmp, 'w')
   const merged = { ...process.env, ...env, PYTHONPATH: cwd, PYTHONIOENCODING: 'utf-8', PYTHONUTF8: '1' }
-  const child = spawn(bin, ['-m', 'mgvideo', ...args], { cwd, env: merged, stdio: ['ignore', fd, fd] })
+  const child = spawn(bin, ['-m', 'mgvideo', ...absArgs(args, callerCwd)], { cwd, env: merged, stdio: ['ignore', fd, fd] })
   const code = await new Promise((resolve) => {
     child.on('error', () => resolve(-1))
     child.on('exit', (c) => resolve(c ?? -1))
