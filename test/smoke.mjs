@@ -64,6 +64,9 @@ try {
 const check = await runCli(['check', specPath])
 ok('check 通过', check.code === 0 && /total\s*:/.test(check.out), check.out.slice(0, 400))
 
+const self = await runCli(['selftest'])
+ok('selftest 全过', self.code === 0 && !/FAIL/.test(self.out), self.out.split('\n').slice(-3).join(' | '))
+
 const out = path.join(tmp, 'smoke.mp4')
 const r = await runCli(['render', specPath, '-o', out, '--workers', '1'])
 ok('render 成功', fs.existsSync(out) && fs.statSync(out).size > 2000, r.out.slice(0, 600))
