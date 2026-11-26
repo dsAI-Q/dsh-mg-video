@@ -52,12 +52,17 @@ _BASE = None
 
 
 def configure(width=1920, height=1080, supersample=1.25):
-    """切换画布尺寸（16:9 / 9:16 / 1:1 都能用），并重建背景。"""
-    global W, H, S, CW, CH, _BASE
+    """切换画布尺寸（16:9 / 9:16 / 1:1 都能用），并重建背景。
+
+    注意：所有依赖画布尺寸的缓存都要在这里清掉。曾经漏清 _SQUARES，
+    换尺寸后方块还在按旧画布坐标画，表现是「小方块全挤到一边」。
+    """
+    global W, H, S, CW, CH, _BASE, _SQUARES
     W, H, S = int(width), int(height), float(supersample)
     CW, CH = int(W * S), int(H * S)
     _FONT_CACHE.clear()
     _BASE = None
+    _SQUARES = None
     return W, H, CW, CH
 
 
