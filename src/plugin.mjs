@@ -132,6 +132,78 @@ export function apply(ctx, config = {}) {
     }),
   )
 
+  ctx.effect(() =>
+    ctx.tools.register({
+      name: 'mg_lint',
+      description:
+        'Check a spec before rendering, and a finished video after rendering. Spec level: unknown template, non-positive duration, ' +
+        'caption wider than the safe area, caption/impact time windows outside [0,1], transitions longer than the scene, and scenes whose ' +
+        'duration is not a whole number of frames (a one-frame jump). Video level (optional): runs of more than 0.5 s with nothing to look ' +
+        'at, audio peak above -1 dBFS, and duration drift against the spec. Exit code is 1 when an error-level problem is found, so it can ' +
+        'gate a render pipeline.',
+      parameters: {
+        specPath: { type: 'string', required: true, description: 'Absolute path of the JSON spec file.' },
+        video: { type: 'string', description: 'Absolute path of a rendered mp4 to also check. Optional.' },
+      },
+      output,
+      async execute({ specPath, video }) {
+        if (!specPath) return 'Missing specPath.'
+        const args = ['lint', path.resolve(workDir, specPath)]
+        if (video) args.push('--video', path.resolve(workDir, video))
+        return call(args, ENGINE_DIR)
+      },
+    }),
+  )
+
+  ctx.effect(() =>
+    ctx.tools.register({
+      name: 'mg_layers',
+      description:
+        'List the layers a spec declares, as JSON: per scene the background, template content, impact, caption and chrome layers with ' +
+        'z-order and absolute start/end seconds. Use this instead of looking at pixels: edit the spec fields it names, then re-render ' +
+        'only the scene you touched with mg_patch.',
+      parameters: {
+        specPath: { type: 'string', required: true, description: 'Absolute path of the JSON spec file.' },
+        outPath: { type: 'string', description: 'Write the JSON to this file instead of returning it on stdout.' },
+      },
+      output,
+      async execute({ specPath, outPath }) {
+        if (!specPath) return 'Missing specPath.'
+        const args = ['layers', path.resolve(workDir, specPath)]
+        if (outPath) args.push('--out', path.resolve(workDir, outPath))
+        return call(args, ENGINE_DIR)
+      },
+    }),
+  )
+
+  ctx.effect(() =>
+    ctx.tools.register({
+      name: 'mg_patch',
+      description:
+        'Re-render ONE scene and splice it back into the film, using an existing frames folder (produce it first with mg_render + keepFrames). ' +
+        'Much faster than a full re-render when you only change a caption or a number. Output duration is identical to the original; ' +
+        'other scenes keep their already-rendered frames.',
+      parameters: {
+        specPath: { type: 'string', required: true, description: 'Absolute path of the JSON spec file.' },
+        scene: { type: 'number', required: true, description: '1-based scene number to re-render.' },
+        framesDir: { type: 'string', required: true, description: 'Folder holding every frame of the film.' },
+        outPath: { type: 'string', required: true, description: 'Where to write the patched mp4.' },
+        sets: {
+          type: 'array',
+          description: 'Field overrides for that scene, e.g. ["caption.text=新文案", "duration=3.5"]. Values are parsed as JSON first.',
+        },
+      },
+      output,
+      async execute({ specPath, scene, framesDir, outPath, sets }) {
+        if (!specPath || !scene || !framesDir || !outPath) return 'Missing specPath, scene, framesDir or outPath.'
+        const args = ['patch', path.resolve(workDir, specPath), '--scene', String(scene),
+          '--frames-dir', path.resolve(workDir, framesDir), '-o', path.resolve(workDir, outPath)]
+        for (const s of sets || []) args.push('--set', String(s))
+        return call(args, ENGINE_DIR)
+      },
+    }),
+  )
+
   // 启动时做一次环境自检，把结论写进日志，方便排查
   ctx.effect(() => {
     findPython()
