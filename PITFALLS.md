@@ -111,3 +111,19 @@ pad 每段独立包络，交接时上一段已经衰减、下一段还没起来�
 
 **30. 受限环境里 `tempfile.mkdtemp()` 建的目录，子进程写不进去**
 `mkdtemp` 建的目录带限制性 ACL，受限令牌的子进程往里写文件直接 `PermissionError`。自测/临时产物改成在 `MG_TMP` 下自己 `os.makedirs` 一个普通目录。
+
+**31. Windows 上写的 JSON 常带 BOM，`json.load` 直接报错**
+PowerShell 的 `Set-Content -Encoding UTF8` 会写 UTF-8 BOM，Python 的 `json.load(open(p, encoding="utf-8"))` 读到第一字节就 `Unexpected UTF-8 BOM`。报错信息里看不出是编码问题，容易当成 spec 写错。
+修法：`load_spec` 统一用 `encoding="utf-8-sig"`；写入端用 `UTF8Encoding($false)` 或 `-NoNewline` 自己控制。
+
+**32. 量文字宽度不能用 `C.txt(...).getbbox()`**
+`C.txt` 把字画在整张画布上，超出画布的部分被裁掉，`getbbox()` 量到的是「被裁后的宽度」——字幕越界反而测不出来（第一版 lint 就是这么漏的：2850px 的字幕只量出 2016px）。
+修法：用字体本身量 `font.getlength(text)`（Pillow 9+），或 `ImageDraw.textlength`。
+
+**33. `--scene-range a:b` 的右边界不含，别按「含」写**
+第一版写成 `_TIMELINE[hi-1][2]`，`2:3` 实际渲了第 2、3 两段，`hi` 超出段数时直接 `IndexError`。
+修法：右边界不含 → 最后一段是 `hi-2`：`end = _TIMELINE[hi-2][2]`，并先校验 `lo >= 1 and hi <= len(scenes)+1 and lo < hi`。
+
+**34. 新加的体检规则，必须先在好片子上跑到零误报**
+第一版 lint 加了一条「字幕显示到段末会与下一段转场重叠」，在仓库自带的 demo spec 上 7/7 全中——因为转场混合的是上一段的**本体**，字幕是转场之后再叠的 overlay 层，根本不会被切。规则本身错了，却长得像「发现了 7 个问题」。
+修法：任何 lint 规则先拿已知合格的片子跑一遍，必须零命中；否则先怀疑规则，不要先怀疑片子。
