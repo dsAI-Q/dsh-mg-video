@@ -21,6 +21,7 @@ from PIL import Image, ImageDraw, ImageFilter, ImageFont
 
 W, H = 1920, 1080
 S = 1.25
+SS = S            # 超采样倍率（画布 = 输出 × SS）；S 会按画布高度等比调整
 CW, CH = int(W * S), int(H * S)
 
 BG_TOP = (14, 10, 28)
@@ -56,10 +57,20 @@ def configure(width=1920, height=1080, supersample=1.25):
 
     注意：所有依赖画布尺寸的缓存都要在这里清掉。曾经漏清 _SQUARES，
     换尺寸后方块还在按旧画布坐标画，表现是「小方块全挤到一边」。
+
+    S 是**设计单位缩放**，不是超采样倍率：
+      画布 = 输出尺寸 × SS
+      S    = SS × (输出高 / 1080)
+    这样模板里所有 `× S` 的内边距、圆角、字号、间距在 1080p 上等于 SS（行为不变），
+    换成 720p / 1440p 时按高度等比缩放。以前 S 只等于 SS，模板用
+    `CH * 比例` 定位、用 `× S` 设间距，两种单位在非 1080p 下会互相打架
+    —— 720p 上对比卡的数字就压到了下面那行小字上。
     """
-    global W, H, S, CW, CH, _BASE, _SQUARES
-    W, H, S = int(width), int(height), float(supersample)
-    CW, CH = int(W * S), int(H * S)
+    global W, H, S, SS, CW, CH, _BASE, _SQUARES
+    W, H = int(width), int(height)
+    SS = float(supersample)
+    S = SS * (H / 1080.0)
+    CW, CH = int(W * SS), int(H * SS)
     _FONT_CACHE.clear()
     _BASE = None
     _SQUARES = None
