@@ -39,7 +39,7 @@ npm i -g @dsai-q/dsh-mg-video     # 或者直接 npx
 
 ```bash
 mgvideo doctor      # Python / Pillow / numpy / ffmpeg 是否齐
-mgvideo selftest    # 11 条回归断言（seg 归一化、缓存、漏边、音轨…）
+mgvideo selftest    # 19 条回归断言（seg 归一化、漏边、空段、字幕越界、单段补丁…）
 ```
 
 `selftest` 不是摆设：每一条断言都对应一个真实修过的缺陷，改动后先跑它。
@@ -48,8 +48,29 @@ mgvideo selftest    # 11 条回归断言（seg 归一化、缓存、漏边、音
 
 ```bash
 mgvideo check examples/spec-demo.json          # 先看时间表，不渲染
+mgvideo lint  examples/spec-demo.json           # 体检：字幕越界/时间窗/帧不对齐，有问题退出码 1
 mgvideo render examples/spec-demo.json -o demo.mp4 --keep-frames
+mgvideo lint  examples/spec-demo.json --video demo.mp4   # 成片体检：空白段/峰值/时长
 ```
+
+## 改一版不用整片重渲
+
+agent 干活最容易卡在「改一句字幕要等四分钟」。这三条命令把它拆开：
+
+```bash
+# 1) 看清单：每个场景有哪些层（背景/内容/冲击/字幕/chrome），z 序和起止秒
+mgvideo layers spec.json --out layers.json
+
+# 2) 只重渲第 3 段，拼回已渲好的其余帧（需要上一次 render --keep-frames 留下的帧目录）
+mgvideo patch spec.json --scene 3 --set "caption.text=换一句" --frames-dir frames -o out.mp4
+#    值按 JSON 解析，所以数字/布尔/数组都能写：--set duration=3.5 --set impact.at=0.6
+
+# 3) 查某一时刻画面（像素级核对，不用整片渲染）
+mgvideo frames --spec spec.json --at 12.5 --out stills
+```
+
+`patch` 的前提是帧目录里已经有整片所有帧，缺帧会直接报错、不会拼出半条片；
+拼完时长与整片一致，其余场景的帧一个字节都不动。
 
 清单长这样（节选）：
 
@@ -143,7 +164,7 @@ mgvideo calib 录屏.mp4 312 --rect "470,285,515,168"
 
 ## 并行与提速
 
-单核 0.25 秒/帧。两种并行：
+单核 0.25 秒/帧。三种并行：
 
 ```bash
 # 多进程（受限环境自动退回单进程，不会中断）
@@ -155,17 +176,28 @@ mgvideo render spec.json -o out.mp4 --shard 1/4 --keep-frames --frames-dir frame
 mgvideo render spec.json -o out.mp4 --shard 2/4 --keep-frames --frames-dir frames
 mgvideo render spec.json -o out.mp4 --shard 3/4 --keep-frames --frames-dir frames
 mgvideo encode spec.json --frames frames -o out.mp4
+
+# 按段切：两个进程各渲一半，切法互不相交（3:5 = 第 3、4 段，右边界不含）
+mgvideo render spec.json -o out.mp4 --scene-range 1:3 --frames-dir frames
+mgvideo render spec.json -o out.mp4 --scene-range 3:9 --frames-dir frames
 ```
+
+**按段切和按帧取模切是两种切法，别混着用**：`--shard` 是按帧号取模，两个分片会同时写同一段的相邻帧；`--scene-range`
+是按整段分，两个进程绝不会碰同一帧。真正的并发写冲突只会发生在「两个进程写同一帧」，
+所以要么全用 shard，要么全用 scene-range。两种都只出帧、不编码。
 
 ## 在 DSH 里当插件用
 
-这个包同时是一个 DSH 插件 bundle（`package.json` 里声明了 `dsh.bundle`）。装上后 agent 直接有四个工具：
+这个包同时是一个 DSH 插件 bundle（`package.json` 里声明了 `dsh.bundle`）。装上后 agent 直接有七个工具：
 
 | 工具 | 作用 |
 |---|---|
-| `mg_render` | 清单 → mp4 |
+| `mg_render` | 清单 → mp4（可 `--shard` / `--scene-range` 分段并行） |
 | `mg_check` | 校验清单、打印时间表 |
-| `mg_frames` | 从视频切逐帧 |
+| `mg_lint` | 渲染前/成片后体检，有错误退出码 1，可当流水线的闸门 |
+| `mg_layers` | 输出分层清单 JSON（agent 改内容不看像素） |
+| `mg_patch` | 只重渲第 N 段并拼回整片 |
+| `mg_frames` | 从视频切逐帧 / 按 spec 导单帧 |
 | `mg_calib` | 出坐标标定图 |
 
 配套的 `SKILL.md` 是给 agent 看的工作流说明（怎么选题、怎么拆屏、怎么验收）。把它放进 skills 目录，agent 就知道什么时候该用这套东西、哪些坑不能踩。
