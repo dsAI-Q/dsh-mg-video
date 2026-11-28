@@ -69,13 +69,40 @@ thr = 25 分位数 + 6 dB
 
 把字幕切点、图形入场点都放在这些静音段上。**这一步做过和没做，观感差一个档次。**
 
-### 6. 渲染前先 check
+### 6. 渲染前先 check + lint
 
 ```bash
 mgvideo check spec.json
+mgvideo lint  spec.json
 ```
 
-看时间表、看有没有未知模板、看 `frames_dir` 是否存在。渲染一次几分钟，别把拼写错误留给渲染。
+`check` 看时间表、未知模板、`frames_dir` 是否存在；`lint` 多管四件渲染器不会报错、但观众一眼能看出来的事：
+
+- 字幕超过安全区（> 84% 画面宽）
+- 字幕/冲击效果的时间窗跑出 [0,1]
+- 转场时长不短于段落时长（整段被吃掉）
+- 段落时长不是整帧倍数（会多或少 1 帧，画面跳一下）
+
+`lint` 有错误时退出码是 1，可以直接当流水线的闸门。渲染完再拿成片体检一次：
+
+```bash
+mgvideo lint spec.json --video out.mp4
+```
+
+这一遍查成片：连续 0.5 秒以上「画面里没有可看的元素」、音频峰值超过 −1 dBFS、成片时长与清单对不上。
+**空白段是 agent 交付最常见的翻车点**——模板会画东西，但两段之间衔接没做时就是一片空背景，渲染器不会报错。
+
+### 6.5 改一句文案不要重渲整片
+
+```bash
+mgvideo layers spec.json --out layers.json          # 先看这版有哪些层
+mgvideo patch  spec.json --scene 3 --set "caption.text=换一句" \
+               --frames-dir frames -o out.mp4        # 只重渲第 3 段
+mgvideo frames --spec spec.json --at 12.5 --out stills  # 单帧核对
+```
+
+整片渲一次几分钟，单段补丁几秒。前提是上一次 render 用了 `--keep-frames`（帧目录要在），
+缺帧会直接报错而不是拼出半条片。
 
 ### 7. 渲染 → 抽帧验收
 
@@ -100,6 +127,8 @@ mgvideo check spec.json
 ## 验收清单
 
 - [ ] `check` 通过，时间表与脚本对得上
+- [ ] `lint` 无 error（字幕越界/时间窗/帧不对齐/空白段/峰值）
+- [ ] `lint --video` 没有报空白段（这是最容易被漏掉的一条）
 - [ ] 每张卡停留 ≥ 2.5 秒
 - [ ] 字幕切点落在语音停顿上（有口播时）
 - [ ] 连续帧看过转场，没有空帧/重影
