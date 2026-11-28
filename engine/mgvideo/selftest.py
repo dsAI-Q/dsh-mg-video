@@ -13,13 +13,14 @@ import copy
 import json
 import os
 import shutil
+import subprocess
 import tempfile
 import wave
 
 import numpy as np
 from PIL import Image
 
-from . import audio, core as C, fx, render
+from . import audio, core as C, fx, lint, render
 
 
 def _tmpdir():
@@ -180,6 +181,115 @@ def run(verbose=True):
         render._TIMELINE = None
         return "无 _prepare 直接出帧成功"
 
+    # 12. lint：字幕超安全区必须被抓出来（用字体量宽度，不是测被裁后的图）
+    def c_lint_overflow():
+        spec = {"size": [1920, 1080], "fps": 30, "background": "none", "transition": "none",
+                "scenes": [{"template": "title", "duration": 2,
+                            "caption": "这句话故意写得很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长"}]}
+        codes = [p["code"] for p in lint.check_spec(spec)]
+        assert "S022" in codes, f"没报字幕越界，实际 {codes}"
+        # 正常长度不能误报
+        ok = {"size": [1920, 1080], "fps": 30, "background": "none", "transition": "none",
+              "scenes": [{"template": "title", "duration": 2, "caption": "一句话"}]}
+        assert "S022" not in [p["code"] for p in lint.check_spec(ok)], "短字幕被误判越界"
+        return "超宽字幕被拦，短字幕不误报"
+
+    # 13. lint：字幕时间窗越界
+    def c_lint_window():
+        spec = {"size": [1280, 720], "fps": 30, "background": "none", "transition": "none",
+                "scenes": [{"template": "title", "duration": 2,
+                            "caption": {"text": "窗", "from": 0.2, "to": 1.6}}]}
+        codes = [p["code"] for p in lint.check_spec(spec)]
+        assert "S020" in codes, f"没报时间窗越界，实际 {codes}"
+        return "to=1.6 被拦"
+
+    # 14. lint：时长不是整帧倍数时会多/少 1 帧，必须提示
+    def c_lint_frame_align():
+        spec = {"size": [640, 360], "fps": 30, "background": "none", "transition": "none",
+                "scenes": [{"template": "title", "duration": 1.01},
+                           {"template": "title", "duration": 1.01}]}
+        probs = lint.check_spec(spec)
+        assert any(p["code"] == "S040" for p in probs), \
+            f"没报帧不对齐，实际 {[p['code'] for p in probs]}"
+        return "1.01s 的段落被点出差 1 帧"
+
+    # 15. lint：成片里空白超过 0.5s 要报（这是 agent 交付最常见的问题）
+    def c_lint_blank():
+        from .render import ffmpeg_bin
+        blank = os.path.join(tmp, "blank.mp4")
+        r = subprocess.run([ffmpeg_bin(), "-hide_banner", "-loglevel", "error", "-y",
+                            "-f", "lavfi", "-i", "color=c=0x101018:s=160x90:d=1.2:r=10",
+                            "-c:v", "libx264", "-pix_fmt", "yuv420p", blank],
+                           capture_output=True)
+        assert r.returncode == 0, "ffmpeg 造不出空白视频"
+        spec = {"size": [160, 90], "fps": 10, "audio": {"bgm": False},
+                "scenes": [{"template": "title", "duration": 1.2}]}
+        probs = lint.check_video(spec, blank)
+        codes = [p["code"] for p in probs]
+        assert "V030" in codes, f"空白段没被报出来，实际 {codes}"
+        return "1.2s 纯色画面被判为空段"
+
+    # 16. layers：每个场景都要有背景/内容层，时间窗从 0 起、连续
+    def c_layers():
+        spec = {"size": [1280, 720], "fps": 30, "background": "bokeh",
+                "scenes": [{"template": "title", "duration": 2, "caption": "一"},
+                           {"template": "number", "duration": 3, "value": "42"}]}
+        data = lint.layers(spec)
+        assert len(data) == 2, f"段数不对：{len(data)}"
+        assert data[0]["start"] == 0.0 and data[0]["end"] == 2.0
+        assert data[1]["start"] == 2.0 and data[1]["end"] == 5.0, "第二段起点没接上"
+        kinds = [l["kind"] for l in data[0]["layers"]]
+        assert "background" in kinds and "content" in kinds and "caption" in kinds, kinds
+        zs = [l["z"] for l in data[0]["layers"]]
+        assert zs == sorted(zs), f"z 序不是递增：{zs}"
+        for l in data[0]["layers"]:
+            assert l["from"] <= l["to"], f"层时间窗反了：{l}"
+        return f"2 段 / 首段 {len(data[0]['layers'])} 层 / z 递增"
+
+    # 17. patch：只重渲指定段，其余帧不动，成片时长不变
+    def c_patch():
+        spec = {"size": [320, 180], "fps": 10, "background": "none", "transition": "none",
+                "audio": {"bgm": False},
+                "scenes": [{"template": "title", "duration": 0.4, "caption": "旧"},
+                           {"template": "title", "duration": 0.4}]}
+        fdir = os.path.join(tmp, "patch-frames")
+        out1 = os.path.join(tmp, "patch-a.mp4")
+        render.render(spec, out1, out_dir=fdir, workers=1, keep_frames=True)
+        n_before = len([f for f in os.listdir(fdir) if f.endswith(".png")])
+        out2 = os.path.join(tmp, "patch-b.mp4")
+        info = render.patch_scene(spec, 1, fdir, out2, sets=["caption.text=新文案"])
+        n_after = len([f for f in os.listdir(fdir) if f.endswith(".png")])
+        assert n_before == n_after == 8, f"帧数变了：{n_before} -> {n_after}"
+        assert info["rerendered"] == 4, f"只该重渲 4 帧，实际 {info['rerendered']}"
+        assert abs(info["seconds"] - 0.8) < 0.01, f"时长变了：{info['seconds']}"
+        assert os.path.getsize(out2) > 1000
+        return f"重渲 {info['rerendered']} 帧 / 总 {n_after} 帧 / {info['seconds']}s"
+
+    # 18. scene-range：只写该段的帧，别的帧一个都不碰
+    def c_scene_range():
+        spec = {"size": [320, 180], "fps": 10, "background": "none", "transition": "none",
+                "audio": {"bgm": False},
+                "scenes": [{"template": "title", "duration": 0.4},
+                           {"template": "title", "duration": 0.4}]}
+        d = os.path.join(tmp, "range-frames")
+        info = render.render(spec, os.path.join(tmp, "range.mp4"), out_dir=d,
+                             workers=1, keep_frames=True, scene_range=(2, 3))
+        names = sorted(f for f in os.listdir(d) if f.endswith(".png"))
+        assert names == ["0004.png", "0005.png", "0006.png", "0007.png"], names
+        assert info["encoded"] is False, "局部渲染不该编码"
+        return f"只写 {names[0]}..{names[-1]}"
+
+    # 19. spec 带 BOM 也要能读（Windows 上 PowerShell 写文件默认带 BOM）
+    def c_bom():
+        p = os.path.join(tmp, "bom.json")
+        with open(p, "wb") as f:
+            f.write(b"\xef\xbb\xbf" + json.dumps(
+                {"size": [320, 180], "fps": 10,
+                 "scenes": [{"template": "title", "duration": 0.2}]}).encode("utf-8"))
+        spec = render.load_spec(p)
+        assert spec["scenes"][0]["template"] == "title"
+        return "带 BOM 的 spec 能读"
+
     for nm, fn in [
         ("seg 归一化", c_seg),
         ("缓动值域", c_ease),
@@ -192,6 +302,14 @@ def run(verbose=True):
         ("shot 不改 spec", c_shot_no_mutation),
         ("空 scenes 报错", c_empty),
         ("worker 冷启动出帧", c_worker_cold),
+        ("lint 字幕越界", c_lint_overflow),
+        ("lint 时间窗越界", c_lint_window),
+        ("lint 帧不对齐", c_lint_frame_align),
+        ("lint 空白段", c_lint_blank),
+        ("layers 分层清单", c_layers),
+        ("patch 单段重渲", c_patch),
+        ("scene-range 按段渲", c_scene_range),
+        ("spec 带 BOM", c_bom),
     ]:
         case(nm, fn)
 
