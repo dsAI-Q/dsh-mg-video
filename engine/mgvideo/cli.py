@@ -16,6 +16,80 @@ def _ff():
     return ffmpeg_bin()
 
 
+def cmd_layers(a):
+    """输出分层清单（JSON），agent 拿它改内容，不需要看像素"""
+    from . import render, lint as L
+    spec = render.load_spec(a.spec)
+    data = {"size": spec.get("size", [1920, 1080]), "fps": int(spec.get("fps", 30)),
+            "scenes": L.layers(spec)}
+    data["total_seconds"] = round(sum(s["duration"] for s in data["scenes"]), 3)
+    if a.out:
+        with open(a.out, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+        print(json.dumps({"out": os.path.abspath(a.out),
+                          "scenes": len(data["scenes"]),
+                          "layers": sum(len(s["layers"]) for s in data["scenes"])},
+                         ensure_ascii=False))
+    else:
+        print(json.dumps(data, ensure_ascii=False, indent=2))
+    return 0
+
+
+def cmd_lint(a):
+    """渲染前体检：模板/时长/字幕越界/时间窗/转场吃字幕 + 成片空白段/峰值/时长"""
+    from . import render, lint as L
+    spec = render.load_spec(a.spec)
+    probs = L.lint(spec, video=a.video)
+    errors = [p for p in probs if p["level"] == "error"]
+    warns = [p for p in probs if p["level"] != "error"]
+    if a.json:
+        print(json.dumps({"ok": not errors, "problems": probs}, ensure_ascii=False, indent=2))
+        return 1 if errors else 0
+    for p in probs:
+        where = f"第{p['scene']:02d}段" if p["scene"] else "全片"
+        when = f" @{p['at']:.2f}s" if p["at"] is not None else ""
+        tag = "错误" if p["level"] == "error" else "提示"
+        print(f"  [{tag}] {p['code']} {where}{when} {p['msg']}")
+    if not probs:
+        print("体检通过：没发现问题")
+    else:
+        print(f"\n{len(errors)} 个错误，{len(warns)} 个提示")
+    return 1 if errors else 0
+
+
+def cmd_patch(a):
+    """只重渲某一段，与帧目录里已渲好的其余帧拼成整片"""
+    from . import render
+    spec = render.load_spec(a.spec)
+    info = render.patch_scene(spec, a.scene, a.frames_dir, a.out,
+                              sets=a.set or [], wav=a.wav)
+    print(json.dumps(info, ensure_ascii=False, indent=2))
+    return 0
+
+
+def cmd_still(a):
+    """按 spec 导出某一时刻的单帧 png（agent 查画面用）"""
+    from . import core as C, render
+    spec = render.load_spec(a.spec)
+    total = render._prepare(spec)
+    fps = int(spec.get("fps", 30))
+    frame = int(round(float(a.at) * fps))
+    clamped = False
+    if frame >= total:
+        frame = total - 1
+        clamped = True
+    img = render.frame_image(frame, spec)
+    img.putalpha(Image.new("L", (C.CW, C.CH), 255))
+    out_dir = a.out or os.path.dirname(os.path.abspath(a.spec))
+    os.makedirs(out_dir, exist_ok=True)
+    dest = os.path.join(out_dir, f"still-{frame / fps:07.2f}s.png")
+    img.convert("RGB").resize((C.W, C.H), Image.LANCZOS).save(dest)
+    print(json.dumps({"image": os.path.abspath(dest), "at": round(frame / fps, 3),
+                      "frame": frame, "total_frames": total, "clamped": clamped},
+                     ensure_ascii=False))
+    return 0
+
+
 def cmd_render(a):
     from . import render
     spec = render.load_spec(a.spec)
@@ -26,9 +100,16 @@ def cmd_render(a):
     def prog(k, t):
         print(f"\r  渲染 {k}/{t}", end="", flush=True)
 
+    scene_range = None
+    if a.scene_range:
+        if ":" not in a.scene_range:
+            raise SystemExit("--scene-range 要写成 a:b，例如 3:5（第 3、4 段，右边界不含）")
+        lo, hi = [int(x) for x in a.scene_range.split(":")]
+        scene_range = (lo, hi)
     info = render.render(spec, a.out, out_dir=a.frames_dir, workers=a.workers,
                          keep_frames=a.keep_frames, progress=prog,
-                         shard=tuple(int(x) for x in a.shard.split("/")) if a.shard else None)
+                         shard=tuple(int(x) for x in a.shard.split("/")) if a.shard else None,
+                         scene_range=scene_range)
     print()
     print(json.dumps(info, ensure_ascii=False, indent=2))
 
@@ -98,7 +179,14 @@ def cmd_selftest(a):
 
 
 def cmd_frames(a):
-    """从视频切出逐帧，供 shot 模板使用"""
+    """两种模式：
+    - frames 视频.mp4 --duration 10 --out dir   ：从视频切逐帧（shot 模板用）
+    - frames --spec s.json --at 12.5            ：按 spec 导出该时刻单帧
+    """
+    if a.spec:
+        return cmd_still(a)
+    if not a.video or a.duration is None or not a.out:
+        raise SystemExit("切帧模式需要：video + --duration + --out（或改用 --spec + --at）")
     os.makedirs(a.out, exist_ok=True)
     cmd = [_ff(), "-hide_banner", "-loglevel", "error", "-y",
            "-ss", str(a.start), "-t", str(a.duration), "-i", a.video,
@@ -187,6 +275,7 @@ def main(argv=None):
     r.add_argument("--frames-dir", default=None)
     r.add_argument("--keep-frames", action="store_true")
     r.add_argument("--shard", default="", help="只渲染第 i/n 份，例如 0/4；分片跑完再统一 encode")
+    r.add_argument("--scene-range", default="", help="只渲染第 a:b 段（1 基，右边界不含，如 3:5）；不开编码")
     r.set_defaults(fn=cmd_render)
 
     c = sub.add_parser("check", help="校验 spec 并打印时间表")
@@ -194,14 +283,36 @@ def main(argv=None):
     c.add_argument("--json", action="store_true")
     c.set_defaults(fn=cmd_check)
 
-    f = sub.add_parser("frames", help="从视频切逐帧（shot 模板用）")
-    f.add_argument("video")
+    f = sub.add_parser("frames", help="切视频逐帧（shot 用）；给 --spec + --at 则导出该时刻单帧")
+    f.add_argument("video", nargs="?", default=None)
+    f.add_argument("--spec", default=None, help="按 spec 出单帧时用")
+    f.add_argument("--at", type=float, default=None, help="时刻（秒），配合 --spec")
     f.add_argument("--start", type=float, default=0.0)
-    f.add_argument("--duration", type=float, required=True)
+    f.add_argument("--duration", type=float, default=None)
     f.add_argument("--fps", type=int, default=30)
-    f.add_argument("--out", required=True)
+    f.add_argument("--out", default=None)
     f.add_argument("--quality", type=int, default=2)
     f.set_defaults(fn=cmd_frames)
+
+    ly = sub.add_parser("layers", help="输出分层清单 JSON（agent 改内容用，不渲染）")
+    ly.add_argument("spec")
+    ly.add_argument("--out", default=None, help="写到文件；不给就打到 stdout")
+    ly.set_defaults(fn=cmd_layers)
+
+    ln = sub.add_parser("lint", help="渲染前体检：字幕越界/时间窗/转场吃字 + 成片空白段/峰值/时长")
+    ln.add_argument("spec")
+    ln.add_argument("--video", default=None, help="给了就顺带体检成片")
+    ln.add_argument("--json", action="store_true")
+    ln.set_defaults(fn=cmd_lint)
+
+    pt = sub.add_parser("patch", help="只重渲第 N 段并拼回整片（需要已有帧目录）")
+    pt.add_argument("spec")
+    pt.add_argument("--scene", type=int, required=True, help="第几段（1 基）")
+    pt.add_argument("--frames-dir", required=True, help="整片帧目录（先 render --keep-frames）")
+    pt.add_argument("-o", "--out", required=True)
+    pt.add_argument("--set", action="append", default=[], help="覆盖字段，如 caption.text=新文案 或 duration=3.5")
+    pt.add_argument("--wav", default=None, help="现成音轨；不给就重合成")
+    pt.set_defaults(fn=cmd_patch)
 
     k = sub.add_parser("calib", help="截图坐标标定图")
     k.add_argument("video")
