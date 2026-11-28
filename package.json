@@ -1,6 +1,6 @@
 {
   "name": "@dsai-q/dsh-mg-video",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Motion-graphics video renderer for DSH: one JSON manifest becomes a 1080p MG video. Template library, effect library, screenshot callouts for screen recordings, and procedural audio — all local, no API.",
   "type": "module",
   "license": "MIT",
