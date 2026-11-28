@@ -290,6 +290,18 @@ def run(verbose=True):
         assert spec["scenes"][0]["template"] == "title"
         return "带 BOM 的 spec 能读"
 
+    # 20. 设计单位必须随画布高度等比（否则非 1080p 尺寸上版式会互相压）
+    def c_design_scale():
+        C.configure(1920, 1080, 1.25)
+        assert abs(C.S - C.SS) < 1e-9, f"1080p 上设计倍率必须等于超采样倍率，实际 {C.S} vs {C.SS}"
+        C.configure(1280, 720, 1.25)
+        assert abs(C.S / C.SS - 720 / 1080) < 1e-9, f"720p 的设计倍率没按高度缩：{C.S / C.SS:.4f}"
+        assert (C.CW, C.CH) == (1600, 900), f"画布尺寸不该跟着设计倍率变：{(C.CW, C.CH)}"
+        C.configure(2560, 1440, 1.25)
+        assert abs(C.S / C.SS - 1440 / 1080) < 1e-9, f"1440p 的设计倍率没按高度缩：{C.S / C.SS:.4f}"
+        C.configure(1920, 1080, 1.25)
+        return "1080p S=SS，720p/1440p 按高度等比"
+
     for nm, fn in [
         ("seg 归一化", c_seg),
         ("缓动值域", c_ease),
@@ -310,6 +322,7 @@ def run(verbose=True):
         ("patch 单段重渲", c_patch),
         ("scene-range 按段渲", c_scene_range),
         ("spec 带 BOM", c_bom),
+        ("设计单位随画布缩放", c_design_scale),
     ]:
         case(nm, fn)
 
