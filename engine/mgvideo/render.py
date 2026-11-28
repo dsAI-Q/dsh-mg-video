@@ -29,7 +29,9 @@ _TIMELINE = None
 
 
 def load_spec(path):
-    with open(path, encoding="utf-8") as f:
+    # utf-8-sig：Windows 上 PowerShell 的 Set-Content 会写 BOM，
+    # 带 BOM 的 spec 以前直接 JSONDecodeError，报错还看不出是 BOM 导致的
+    with open(path, encoding="utf-8-sig") as f:
         return json.load(f)
 
 
@@ -221,7 +223,8 @@ def ffmpeg_bin():
     return "ffmpeg"
 
 
-def render(spec, out_mp4, out_dir=None, workers=None, keep_frames=False, progress=None, shard=None):
+def render(spec, out_mp4, out_dir=None, workers=None, keep_frames=False, progress=None, shard=None,
+           scene_range=None):
     """渲染整片。返回统计信息。
 
     并行有两种方式：
@@ -229,6 +232,8 @@ def render(spec, out_mp4, out_dir=None, workers=None, keep_frames=False, progres
          这时自动退回单进程，不会报错终止。
       2) shard=(i, n)：只渲染帧号 % n == i 的部分。适合在 shell 里开 n 个进程，
          任何环境都能用，也方便放到多台机器上分。
+      3) scene_range=(lo, hi)：只渲染第 lo..hi-1 段（1 基，hi 不含）。给「两个进程
+         各渲一半」用；两个进程的范围绝不能重叠，否则同一帧会被写两次。
     """
     total = _prepare(spec)
     fps = int(spec.get("fps", 30))
@@ -239,6 +244,16 @@ def render(spec, out_mp4, out_dir=None, workers=None, keep_frames=False, progres
     if shard:
         i, n = shard
         idxs = [f for f in idxs if f % n == i]
+    elif scene_range:
+        lo, hi = scene_range
+        n_sc = len(_TIMELINE)
+        if lo < 1 or hi > n_sc + 1 or lo >= hi:
+            raise ValueError(f"scene-range 越界：{lo}:{hi}，本片只有 {n_sc} 段"
+                             f"（写法 3:5 表示第 3、4 段，右边界不含）")
+        # lo/hi 是 1 基、右边界不含：3:5 = 第 3、4 段
+        start = _TIMELINE[lo - 1][1]
+        end = _TIMELINE[hi - 2][2]
+        idxs = list(range(start, end))
     tasks = [(i, os.path.join(out_dir, f"{i:04d}.png"), spec) for i in idxs]
 
     workers = workers or min(os.cpu_count() or 4, 8)
@@ -265,9 +280,12 @@ def render(spec, out_mp4, out_dir=None, workers=None, keep_frames=False, progres
             if progress and (len(finished) + k) % 30 == 0:
                 progress(len(finished) + k, len(tasks))
 
-    # 分片模式下不编码（由调用方在所有分片完成后统一编码）
+    # 分片/局部模式下不编码（由调用方在所有分片完成后统一编码）
     if shard and shard[1] > 1:
         return {"frames": len(tasks), "shard": list(shard), "encoded": False}
+    if scene_range:
+        return {"frames": len(tasks), "scene_range": list(scene_range), "encoded": False,
+                "frame_ids": [idxs[0], idxs[-1]] if idxs else []}
 
     audio = spec.get("audio") or {}
     wav = None
@@ -300,3 +318,91 @@ def encode(spec, frames_dir, out_mp4, wav=None):
     cmd += ["-movflags", "+faststart", out_mp4]
     subprocess.run(cmd, check=True)
     return out_mp4
+
+
+# ---------------------------------------------------------------- 单段补丁
+
+def apply_overrides(scene, assignments):
+    """把 ["caption.text=新文案", "duration=3.5"] 应用到一段上（不改原 dict）。
+
+    值先尝试按 JSON 解析（数字/布尔/数组/对象都能写），解析不了就当字符串。
+    键支持点号下钻，例如 caption.text。
+    """
+    import copy as _copy
+    sc = _copy.deepcopy(scene)
+    for item in assignments or []:
+        if "=" not in item:
+            raise ValueError(f"--set 要写成 key=value，收到：{item}")
+        key, raw = item.split("=", 1)
+        key = key.strip()
+        raw = raw.strip()
+        try:
+            val = json.loads(raw)
+        except Exception:
+            val = raw
+        parts = key.split(".")
+        node = sc
+        for k, p in enumerate(parts[:-1]):
+            if not isinstance(node, dict):
+                raise ValueError(f"--set 的路径穿不过去了：{key}")
+            cur = node.get(p)
+            if not isinstance(cur, dict):
+                # caption 可以写成字符串，这时 --set caption.text=... 要能升成对象
+                if isinstance(cur, str) and parts[k + 1] == "text":
+                    node[p] = {"text": cur}
+                elif cur is None:
+                    node[p] = {}
+                else:
+                    raise ValueError(
+                        f"--set 的路径穿不过去了：{key}（{p} 现在是 {type(cur).__name__}，不是对象）")
+            node = node[p]
+        if not isinstance(node, dict):
+            raise ValueError(f"--set 的路径穿不过去了：{key}")
+        node[parts[-1]] = val
+    return sc
+
+
+def patch_scene(spec, scene_no, frames_dir, out_mp4, sets=None, wav=None):
+    """只重渲第 scene_no 段，跟帧目录里已渲好的其余帧拼成整片。
+
+    前提：frames_dir 里已经有整片所有帧（先用 render --keep-frames 渲一次）。
+    好处：改一句文案/一个数字，不用重渲整片。
+    """
+    scenes = spec.get("scenes") or []
+    if not scenes:
+        raise ValueError("spec 里 scenes 是空的")
+    if not (1 <= scene_no <= len(scenes)):
+        raise ValueError(f"--scene 越界：本片有 {len(scenes)} 段，收到 {scene_no}")
+
+    if sets:
+        spec = apply_overrides(spec, [])  # 深拷贝整份，避免改到调用方的 spec
+        spec["scenes"][scene_no - 1] = apply_overrides(scenes[scene_no - 1], sets)
+
+    total = _prepare(spec)
+    fps = int(spec.get("fps", 30))
+    sc, a, b = _TIMELINE[scene_no - 1]
+
+    missing = [f for f in range(total)
+               if not os.path.exists(os.path.join(frames_dir, f"{f:04d}.png"))]
+    if missing:
+        raise ValueError(
+            f"帧目录里缺 {len(missing)} 帧（第一个 {missing[0]:04d}.png）："
+            f"先用 render --keep-frames 渲整片，再打补丁")
+
+    for f in range(a, b):
+        _render_one((f, os.path.join(frames_dir, f"{f:04d}.png"), spec))
+
+    audio = spec.get("audio") or {}
+    if wav is None and (audio.get("voice") or audio.get("bgm", True)):
+        from . import audio as A
+        wav = os.path.join(frames_dir, "mix.wav")
+        A.build(total / fps, wav, voice=audio.get("voice"),
+                scene_bounds=[x / fps for _, x, _ in _TIMELINE][1:],
+                ticks=[float(x) for x in audio.get("ticks", [])],
+                hits=[float(x) for x in audio.get("hits", [])])
+
+    encode(spec, frames_dir, out_mp4, wav)
+    return {"output": out_mp4, "scene": scene_no,
+            "scene_frames": [a, b - 1], "rerendered": b - a,
+            "total_frames": total, "seconds": round(total / fps, 2),
+            "size_mb": round(os.path.getsize(out_mp4) / 1048576, 2)}
